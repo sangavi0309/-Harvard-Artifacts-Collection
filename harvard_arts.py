@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import time
 from sqlalchemy import create_engine
+import mysql.connector
 
 # ----------------- Streamlit Config -----------------
 st.set_page_config(page_title="Harvard Art Collection", page_icon=":art:", layout="wide")
@@ -180,19 +181,180 @@ with tab2:
         else:
             st.error("No data available. Please collect data first in Tab 1.")
 with tab3:
-    st.header("Execute SQL Queries")
-    st.markdown("Run custom SQL queries against the Harvard Artifacts database.")
+    # Tab 3: SQL Queries
+    st.header("Run SQL Queries")
+    with st.container():
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="2004",
+                database="harvard_records"
+            )
+            cursor = conn.cursor(dictionary=True)
+            # do something with cursor
 
-    query = st.text_area("Enter your SQL query here:", height=150, placeholder="e.g., SELECT * FROM artifact_metadata LIMIT 10;")
+    query_dict = {
+        # --- artifact_metadata Queries ---
+        "List all artifacts from the 11th century belonging to Byzantine culture.": """
+            SELECT * FROM artifact_metadata 
+            WHERE century='11th century' AND culture='Byzantine'
+        """,
+        "What are the unique cultures represented in the artifacts?": """
+            SELECT DISTINCT culture FROM artifact_metadata
+        """,
+        "List all artifacts from the Archaic Period.": """
+            SELECT * FROM artifact_metadata 
+            WHERE period='Archaic Period'
+        """,
+        "List artifact titles ordered by accession year in descending order.": """
+            SELECT title, accessionyear FROM artifact_metadata 
+            ORDER BY accessionyear DESC
+        """,
+        "How many artifacts are there per department?": """
+            SELECT department, COUNT(*) AS total 
+            FROM artifact_metadata 
+            GROUP BY department
+        """,
 
-    if st.button("Run Query", type="primary"):
-        if query.strip():
-            try:
-                with engine.connect() as conn:
-                    result_df = pd.read_sql(query, conn)
-                    st.success("✅ Query executed successfully.")
-                    st.dataframe(result_df)
-            except Exception as e:
-                st.error(f"❌ Query Error: {e}")
-        else:
-            st.warning("Please enter a valid SQL query.")            
+        # --- artifact_media Queries ---
+        "Which artifacts have more than 1 image?": """
+            SELECT * FROM artifact_media 
+            WHERE imagecount > 1
+        """,
+        "What is the average rank of all artifacts?": """
+            SELECT AVG(rank) AS average_rank FROM artifact_media
+        """,
+        "Which artifacts have a higher colorcount than mediacount?": """
+            SELECT * FROM artifact_media 
+            WHERE colorcount > mediacount
+        """,
+        "List all artifacts created between 1500 and 1600.": """
+            SELECT * FROM artifact_media 
+            WHERE datebegin >= 1500 AND dateend <= 1600
+        """,
+        "How many artifacts have no media files?": """
+            SELECT COUNT(*) AS no_media_count 
+            FROM artifact_media 
+            WHERE mediacount = 0
+        """,
+
+        # --- artifact_colors Queries ---
+        "What are all the distinct hues used in the dataset?": """
+            SELECT DISTINCT hue FROM artifact_colors
+        """,
+        "What are the top 5 most used colors by frequency?": """
+            SELECT color, COUNT(*) AS frequency 
+            FROM artifact_colors 
+            GROUP BY color 
+            ORDER BY frequency DESC 
+            LIMIT 5
+        """,
+        "What is the average coverage percentage for each hue?": """
+            SELECT hue, AVG(percent) AS avg_coverage 
+            FROM artifact_colors 
+            GROUP BY hue
+        """,
+        "List all colors used for a given artifact ID.": """
+            SELECT * FROM artifact_colors 
+            WHERE objectid = %s
+        """,
+        "What is the total number of color entries in the dataset?": """
+            SELECT COUNT(*) AS total_colors FROM artifact_colors
+        """,
+
+        # --- Join-Based Queries ---
+        "List artifact titles and hues for all artifacts belonging to the Byzantine culture.": """
+            SELECT m.title, c.hue 
+            FROM artifact_metadata m 
+            JOIN artifact_colors c ON m.id = c.objectid 
+            WHERE m.culture = 'Byzantine'
+        """,
+        "List each artifact title with its associated hues.": """
+            SELECT m.title, c.hue 
+            FROM artifact_metadata m 
+            JOIN artifact_colors c ON m.id = c.objectid
+        """,
+        "Get artifact titles, cultures, and media ranks where the period is not null.": """
+            SELECT m.title, m.culture, me.rank 
+            FROM artifact_metadata m 
+            JOIN artifact_media me ON m.id = me.objectid 
+            WHERE m.period IS NOT NULL
+        """,
+        "Find artifact titles ranked in the top 10 that include the color hue 'Grey'.": """
+            SELECT m.title, me.rank, c.hue 
+            FROM artifact_metadata m 
+            JOIN artifact_media me ON m.id = me.objectid 
+            JOIN artifact_colors c ON m.id = c.objectid 
+            WHERE c.hue = 'Grey' 
+            ORDER BY me.rank DESC 
+            LIMIT 10
+        """,
+        "How many artifacts exist per classification, and what is the average media count for each?": """
+            SELECT m.classification, COUNT(*) AS total, AVG(me.mediacount) AS avg_media 
+            FROM artifact_metadata m 
+            JOIN artifact_media me ON m.id = me.objectid 
+            GROUP BY m.classification
+        """,
+
+        # --- Own SQL Queries for Deeper Insights ---
+        "Most Common Mediums Used Across Artifacts": """
+            SELECT medium, COUNT(*) AS count
+            FROM artifact_metadata
+            GROUP BY medium
+            ORDER BY count DESC
+            LIMIT 10
+        """,
+        "Artifacts with Missing Descriptions": """
+            SELECT id, title, culture, classification
+            FROM artifact_metadata
+            WHERE description IS NULL OR description = ''
+        """,
+        "Average Accession Year by Classification": """
+            SELECT classification, AVG(accessionyear) AS avg_year
+            FROM artifact_metadata
+            GROUP BY classification
+            ORDER BY avg_year DESC
+        """,
+        "Artifacts with Longest Time Span Between Creation Dates": """
+            SELECT objectid, datebegin, dateend, (dateend - datebegin) AS duration
+            FROM artifact_media
+            ORDER BY duration DESC
+            LIMIT 10
+        """,
+        "Top 5 Departments by Artifact Count": """
+            SELECT department, COUNT(*) AS total
+            FROM artifact_metadata
+            GROUP BY department
+            ORDER BY total DESC
+            LIMIT 5
+        """,
+        "Most Frequently Used Hue Across All Artifacts": """
+            SELECT hue, COUNT(*) AS frequency
+            FROM artifact_colors
+            GROUP BY hue
+            ORDER BY frequency DESC
+            LIMIT 1
+        """
+    }
+
+    query_titles = list(query_dict.keys())
+    selected_query = st.selectbox("Choose a query", query_titles)
+
+    if "%s" in query_dict[selected_query]:
+        artifact_id = st.number_input("Enter Artifact ID", min_value=1)
+        cursor.execute(query_dict[selected_query], (artifact_id,))
+    else:
+        cursor.execute(query_dict[selected_query])
+
+    df_result = pd.DataFrame(cursor.fetchall(), columns=cursor.column_names)
+
+    # Show executed SQL
+    st.subheader("SQL Query Executed")
+    st.code(query_dict[selected_query], language="sql")
+
+    # Show results
+    st.subheader(f"📊 Results for: {selected_query}")
+    st.dataframe(df_result)
+
+cursor.close()
+conn.close()
